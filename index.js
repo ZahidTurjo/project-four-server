@@ -4,17 +4,18 @@ const cookieParser = require('cookie-parser')
 const jwt = require('jsonwebtoken')
 require('dotenv').config()
 const app = express()
-const port = process.env.PORT ||5000
+const port = process.env.PORT || 5000
+const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
 
 
 const corsOptions = {
-    origin: ['http://localhost:5173', 'http://localhost:5174'],
-    credentials: true,
-    optionSuccessStatus: 200,
-  }
-  app.use(cors(corsOptions))
-  app.use(express.json())
-  app.use(cookieParser())
+  origin: ['http://localhost:5173', 'http://localhost:5174'],
+  credentials: true,
+  optionSuccessStatus: 200,
+}
+app.use(cors(corsOptions))
+app.use(express.json())
+app.use(cookieParser())
 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -35,87 +36,151 @@ async function run() {
     await client.connect();
     const usersCollection = client.db('stayVista').collection('users')
     const roomCollection = client.db('stayVista').collection('rooms')
-  
+    const bookingCollection = client.db('stayVista').collection('bookings')
 
-  //  jwt
-  app.post('/jwt', async (req, res) => {
-    const user = req.body
-   
-    const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-      expiresIn: '1d',
-    })
-    console.log(token);
-    console.log('I need a new jwt', user)
-    res
-      .cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+
+    //  jwt
+    app.post('/jwt', async (req, res) => {
+      const user = req.body
+
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: '1d',
       })
-      .send({ success: true })
-  }) 
-  // log out
-  app.get('/logout', async (req, res) => {
-    try {
+      console.log(token);
+      console.log('I need a new jwt', user)
       res
-        .clearCookie('token', {
-          maxAge: 0,
+        .cookie('token', token, {
+          httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
         })
         .send({ success: true })
-      console.log('Logout successful')
-    } catch (err) {
-      res.status(500).send(err)
-    }
-  })
+    })
+    // log out
+    app.get('/logout', async (req, res) => {
+      try {
+        res
+          .clearCookie('token', {
+            maxAge: 0,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+          })
+          .send({ success: true })
+        console.log('Logout successful')
+      } catch (err) {
+        res.status(500).send(err)
+      }
+    })
 
-  app.get('/rooms', async(req,res)=>{
-    const result=await roomCollection.find().toArray()
-    res.send(result)
-  })
-  app.get('/room/:id', async(req,res)=>{
-    const id=req.params.id;
-    const query={_id :new ObjectId(id) }
-    const result=await roomCollection.findOne(query)
-    res.send(result)
-  })
-// get rooms for host
+    app.get('/rooms', async (req, res) => {
+      const result = await roomCollection.find().toArray()
+      res.send(result)
+    })
+    app.get('/room/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await roomCollection.findOne(query)
+      res.send(result)
+    })
+    // get rooms for host
 
-app.get('/rooms/:email', async(req,res)=>{
-  const email =req.params.email;
-  const result= await roomCollection.find({'host.email' :email}).toArray()
-  res.send(result)
-})
+    app.get('/rooms/:email', async (req, res) => {
+      const email = req.params.email;
+      const result = await roomCollection.find({ 'host.email': email }).toArray()
+      res.send(result)
+    })
 
-// save or modify user
-app.put('/users/:email', async (req, res) => {
-    const email = req.params.email
-    const user = req.body
-    const query = { email: email }
-    const options = { upsert: true }
-    const isExist = await usersCollection.findOne(query)
-    console.log('User found?----->', isExist)
-    if (isExist) return res.send(isExist)
-    const result = await usersCollection.updateOne(
-      query,
-      {
-        $set: { ...user, timestamp: Date.now() },
-      },
-      options
-    )
-    res.send(result)
-  })
-// save a room in database
-app.post('/rooms',async(req,res)=>{
-  const room=req.body;
-  const result= await roomCollection.insertOne(room)
-  res.send(result)
-})
+    // save or modify user
+    app.put('/users/:email', async (req, res) => {
+      const email = req.params.email
+      const user = req.body
+      const query = { email: email }
+      const options = { upsert: true }
+      const isExist = await usersCollection.findOne(query)
+      console.log('User found?----->', isExist)
+      if (isExist) return res.send(isExist)
+      const result = await usersCollection.updateOne(
+        query,
+        {
+          $set: { ...user, timestamp: Date.now() },
+        },
+        options
+      )
+      res.send(result)
+    })
+    // get user
+    app.get('/users', async (req, res) => {
+
+      const result = await usersCollection.find().toArray()
+      res.send(result)
+
+    })
+
+    app.get('/users/:email', async (req, res) => {
+      const email = req.params.email
+
+      const query = { email: email }
+      const result = await usersCollection.findOne(query)
+      res.send(result)
+
+    })
+
+    // save a room in database
+    app.post('/rooms', async (req, res) => {
+      const room = req.body;
+      const result = await roomCollection.insertOne(room)
+      res.send(result)
+    })
 
 
+    // general client secret for stripe
+    app.post('/create-payment-intent', async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100)
+      if (!price || amount < 1) return
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
+      })
 
+      res.send({ clientSecret: paymentIntent.client_secret })
 
+    })
+
+    // save booking info in booking collection
+    app.post('/bookings', async (req, res) => {
+      const booking = req.body
+      const result = await bookingCollection.insertOne(booking)
+      // send email
+
+      res.send(result)
+    })
+    app.get('/bookings', async (req, res) => {
+      const email= req.query.email
+      const query={'guest.email':email}
+      const result = await bookingCollection.find(query).toArray()
+      res.send(result)
+    })
+    app.get('/bookings/host', async (req, res) => {
+      const email= req.query.email
+      const query={'host':email}
+      const result = await bookingCollection.find(query).toArray()
+      res.send(result)
+    })
+
+    app.patch('/rooms/status/:id', async (req, res) => {
+      const id = req.params.id
+      const status = req.body.status
+      const query = { _id: new ObjectId(id) }
+      const updatedDoc = {
+        $set: {
+          booked: status,
+        }
+      }
+      const result = await roomCollection.updateOne(query, updatedDoc)
+      res.send(result)
+    })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
