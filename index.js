@@ -6,6 +6,7 @@ require('dotenv').config()
 const app = express()
 const port = process.env.PORT || 5000
 const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
+const nodemailer= require('nodemailer')
 
 
 const corsOptions = {
@@ -16,6 +17,44 @@ const corsOptions = {
 app.use(cors(corsOptions))
 app.use(express.json())
 app.use(cookieParser())
+
+const verifyToken = async (req, res, next) => {
+  const token = req.cookies?.token
+  console.log('from verify token',token)
+  if (!token) {
+    return res.status(401).send({ message: 'unauthorized access' })
+  }
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      console.log(err)
+      return res.status(401).send({ message: 'unauthorized access' })
+    }
+    req.user = decoded
+    next()
+  })
+}
+
+const sendEmail=()=>{
+  const transporter= nodemailer.createTransport({
+    service:'gmail',
+    host:'smtp.gmail.com',
+    port:587,
+    secure:false,
+    auth:{
+      user:process.env.USER,
+      pass:process.env.PASS,
+    }
+  })
+  // verfiy connection
+  transporter.verify((error,success)=>{
+    if(error){
+      console.log(error);
+    }else{
+      console.log('server is ready to take our emails', success);
+    }
+  })
+
+}
 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -31,13 +70,35 @@ const client = new MongoClient(uri, {
 });
 
 async function run() {
+
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
     const usersCollection = client.db('stayVista').collection('users')
     const roomCollection = client.db('stayVista').collection('rooms')
     const bookingCollection = client.db('stayVista').collection('bookings')
+    // role verification middleware
 
+    const verifyAdmin=async(req,res,next)=>{
+      const user=req.user;
+      const query={email :user?.email}
+      const result= await usersCollection.findOne(query)
+      if(!result || result?.role !== 'admin')
+      return res.status(401).send({message:"unauthorized access"})
+    next()
+    }
+    // for host 
+    const verifyHost=async(req,res,next)=>{
+      const user=req.user
+      const query={email :user?.email}
+      const result= await usersCollection.findOne(query)
+      if(!result || result?.role !== 'host'){
+        return res.status(401).send({message:"unauthorized access"})
+      }
+      
+    next()
+    }
+// fvba dhes ddzx wvzh
 
     //  jwt
     app.post('/jwt', async (req, res) => {
@@ -98,7 +159,21 @@ async function run() {
       const options = { upsert: true }
       const isExist = await usersCollection.findOne(query)
       console.log('User found?----->', isExist)
-      if (isExist) return res.send(isExist)
+      if (isExist){
+        if(user?.status === 'Requested'){
+          const result= await usersCollection.updateOne(query,
+            {
+              $set:user,
+            },
+            options
+            )
+            return res.send(result)
+           
+        }else{
+          return res.send(isExist)
+        }
+      
+      }
       const result = await usersCollection.updateOne(
         query,
         {
@@ -108,6 +183,7 @@ async function run() {
       )
       res.send(result)
     })
+
     // get user
     app.get('/users', async (req, res) => {
 
@@ -123,6 +199,21 @@ async function run() {
       const result = await usersCollection.findOne(query)
       res.send(result)
 
+    })
+    // update user role
+    app.put('/users/update/:email', async(req,res)=>{
+      const email=req.params.email;
+      const user=req.body;
+      const query={email:email};
+      const options={upsert:true};
+      const updatedDoc={
+        $set:{
+          ...user,
+          timestamp: Date.now()
+        }
+      }
+      const result=await usersCollection.updateOne(query,updatedDoc,options)
+      res.send(result)
     })
 
     // save a room in database
@@ -162,7 +253,7 @@ async function run() {
       const result = await bookingCollection.find(query).toArray()
       res.send(result)
     })
-    app.get('/bookings/host', async (req, res) => {
+    app.get('/bookings/host', verifyToken,verifyHost, async (req, res) => {
       const email= req.query.email
       const query={'host':email}
       const result = await bookingCollection.find(query).toArray()
